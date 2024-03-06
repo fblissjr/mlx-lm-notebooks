@@ -6,6 +6,10 @@ __pycache__/
 # C extensions
 *.so
 
+# data
+*.jsonl
+data/
+
 # Distribution / packaging
 .Python
 build/
