@@ -12,7 +12,7 @@
     "<|eos|>"
   ],
   "bos_token": "<|startoftext|>",
-  "eos_token": "",
+  "eos_token": "<|eos|>",
   "pad_token": "<|pad|>",
-  "chat_template": "{% set user_tag = '<|startoftext|>' %}{% set user_end = '<|extra_0|>' %}{% set system_tag = '<|startoftext|>' %}{% set system_end = '<|extra_4|>' %}{% set assistant_tag = '' %}{% set assistant_end = '<|endoftext|>' + '<|eos|>' %}{% for message in messages %}{% if message['role'] == 'system' %}{{ system_tag + message['content'] + system_end }}{% elif message['role'] == 'user' %}{{ user_tag + message['content'] + user_end }}{% elif message['role'] == 'assistant' %}{{ assistant_tag + message['content'] + assistant_end }}{% endif %}{% endfor %}"
+  "chat_template": "{% set context = {'has_head': true} %}{% set loop_messages = messages %}{% for message in loop_messages %}{% set content = message['content'] %}{% if loop.index0 == 0 %}{% if content == '' %}{% set _ = context.update({'has_head': false}) %}{% elif message['role'] == 'system' %}{% set content = '<|startoftext|>' + content + '<|extra_4|>' %}{% endif %}{% endif %}{% if message['role'] == 'user' %}{% if loop.index0 == 1 and not context.has_head %}{% set content = '<|startoftext|>' + content %}{% endif %}{% if loop.index0 == 1 and context.has_head %}{% set content = content + '<|extra_0|>' %}{% else %}{% set content = '<|startoftext|>' + content + '<|extra_0|>' %}{% endif %}{% elif message['role'] == 'assistant' %}{% set content = content + '<|eos|>' %}{% endif %}{{ content }}{% endfor %}"
 }

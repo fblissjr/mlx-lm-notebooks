@@ -8,16 +8,17 @@ from transformers import AutoConfig
 import tiktoken
 from enum import Enum
 
-# Define the prompt template for video description
-PROMPT_TEMPLATE_ENCODE_VIDEO = (
-    "<|start_header_id|>system<|end_header_id|>\n\nDescribe the video by detailing the following aspects: "
-    "1. The main content and theme of the video."
-    "2. The color, shape, size, texture, quantity, text, and spatial relationships of the objects."
-    "3. Actions, events, behaviors, temporal relationships, physical movement changes of the objects."
-    "4. background environment, light, style and atmosphere."
-    "5. camera angles, movements, and transitions used in the video:<|eot_id|>"
-    "<|start_header_id|>user<|end_header_id|>\n\n{}<|eot_id|>"
-)
+# # Define the prompt template for video description
+# PROMPT_TEMPLATE_ENCODE_VIDEO = (
+#     "<|start_header_id|>system<|end_header_id|>\n\nDescribe the video by detailing the following aspects: "
+#     "1. The main content and theme of the video."
+#     "2. The color, shape, size, texture, quantity, text, and spatial relationships of the objects."
+#     "3. Actions, events, behaviors, temporal relationships, physical movement changes of the objects."
+#     "4. background environment, light, style and atmosphere."
+#     "5. camera angles, movements, and transitions used in the video:<|eot_id|>"
+#     "<|start_header_id|>user<|end_header_id|>\n\n{}<|eot_id|>"
+# )
+PROMPT_TEMPLATE_ENCODE_VIDEO=("{}")
 
 def debug_tokenizer_type(tokenizer):
     """Debug what type of tokenizer we're actually using."""
@@ -90,9 +91,7 @@ def format_raw_message(text: str, role: str = "user") -> str:
 def format_for_model(tokenizer, messages, use_chat_template: bool = False, add_generation_prompt: bool = False) -> str:
     """Formats messages using the tokenizer's chat template or the predefined prompt template."""
     if use_chat_template:
-        prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=add_generation_prompt)
-        prompt += tokenizer.eos_token + tokenizer.decode([127957])
-        return prompt
+        return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=add_generation_prompt)
     else:
         # Use the PROMPT_TEMPLATE_ENCODE_VIDEO to format the prompt
         return PROMPT_TEMPLATE_ENCODE_VIDEO.format(messages)
@@ -206,7 +205,7 @@ def main():
         tokenizer_config={
             "trust_remote_code": args.trust_remote_code,
             "use_fast": False,
-            "eos_token": None,  # Remove the eos_token
+            # "eos_token": None,  # Remove the eos_token
         }
     )
     # After loading model and tokenizer
@@ -231,12 +230,12 @@ def main():
         print_tokens(tokenizer, template, "Template Tokens")
         
         if args.use_chat_template:
-            messages = [{"role": "system", "content": ""}, {"role": "user", "content": template}]
+            messages = [{"role": "user", "content": template}]
             debug_chat_format(tokenizer, messages)
             
     # Select the prompt based on the arguments
     if args.use_chat_template:
-        messages = [{"role": "system", "content": ""}, {"role": "user", "content": args.prompt}]
+        messages = [{"role": "user", "content": args.prompt}]
         prompt = format_for_model(tokenizer, messages, use_chat_template=True, add_generation_prompt=False)
     else:
         prompt = tokenizer.encode(args.prompt)
