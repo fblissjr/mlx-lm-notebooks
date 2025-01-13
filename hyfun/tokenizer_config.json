@@ -1,0 +1,18 @@
+{
+  "model_max_length": 1048576,
+  "tokenizer_class": "HYTokenizer",
+  "auto_map": {
+    "AutoTokenizer": ["tokenization_hy.HYTokenizer", "null"]
+  },
+  "additional_special_tokens": [
+    "<|startoftext|>",
+    "<|extra_0|>",
+    "<|extra_4|>",
+    "<|extra_5|>",
+    "<|eos|>"
+  ],
+  "bos_token": "<|startoftext|>",
+  "eos_token": "",
+  "pad_token": "<|pad|>",
+  "chat_template": "{% set user_tag = '<|startoftext|>' %}{% set user_end = '<|extra_0|>' %}{% set system_tag = '<|startoftext|>' %}{% set system_end = '<|extra_4|>' %}{% set assistant_tag = '' %}{% set assistant_end = '<|endoftext|>' + '<|eos|>' %}{% for message in messages %}{% if message['role'] == 'system' %}{{ system_tag + message['content'] + system_end }}{% elif message['role'] == 'user' %}{{ user_tag + message['content'] + user_end }}{% elif message['role'] == 'assistant' %}{{ assistant_tag + message['content'] + assistant_end }}{% endif %}{% endfor %}"
+}

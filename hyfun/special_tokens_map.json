@@ -1,0 +1,12 @@
+{
+  "additional_special_tokens": [
+    "<|startoftext|>",
+    "<|extra_0|>",
+    "<|extra_4|>",
+    "<|extra_5|>",
+    "<|endoftext|>"
+  ],
+  "bos_token": "<|startoftext|>",
+  "eos_token": "<|eos|>",
+  "pad_token": "<|pad|>"
+}
