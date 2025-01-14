@@ -120,10 +120,10 @@ def format_for_model(tokenizer, messages, use_chat_template: bool = False, add_g
         print("Raw formatted:", repr(formatted))
         print("Initial tokens:", [tokenizer.decode([t]) for t in tokenizer.encode(formatted)])
 
-        # Make sure user messages end with extra_0
-        if messages[-1]["role"] == "user":
-            if not formatted.endswith("<|extra_0|>"):
-                formatted += "<|extra_0|>"
+        # # Make sure user messages end with extra_0
+        # if messages[-1]["role"] == "user":
+        #     if not formatted.endswith("<|extra_0|>"):
+        #         formatted += "<|extra_0|>"
 
         # Debug final format
         print("\nFinal formatting:")
