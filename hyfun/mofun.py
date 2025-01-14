@@ -20,6 +20,24 @@ from enum import Enum
 # )
 PROMPT_TEMPLATE_ENCODE_VIDEO=("{}")
 
+def debug_prompt(tokenizer, prompt: str, use_chat_template: bool):
+    """Show exactly what's being sent to the model"""
+    print("\nPrompt Debug:")
+    print("Raw input:", repr(prompt))
+    
+    if use_chat_template:
+        messages = [{"role": "user", "content": prompt}]
+        formatted = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        print("\nAfter chat template:")
+        print(repr(formatted))
+        tokens = tokenizer.encode(formatted)
+    else:
+        tokens = tokenizer.encode(prompt)
+        
+    print("\nFinal tokens:")
+    print([tokenizer.decode([t]) for t in tokens])
+    return tokens
+
 def debug_tokenizer_type(tokenizer):
     """Debug what type of tokenizer we're actually using."""
     print("\nTokenizer Debug:")
@@ -89,11 +107,30 @@ def format_raw_message(text: str, role: str = "user") -> str:
     return text
 
 def format_for_model(tokenizer, messages, use_chat_template: bool = False, add_generation_prompt: bool = False) -> str:
-    """Formats messages using the tokenizer's chat template or the predefined prompt template."""
+    """Formats messages using the tokenizer's chat template."""
     if use_chat_template:
-        return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=add_generation_prompt)
+        # Apply template without generation prompt first
+        formatted = tokenizer.apply_chat_template(
+            messages, 
+            tokenize=False, 
+            add_generation_prompt=add_generation_prompt
+        )
+        # Debug output before any modifications
+        print("\nInitial formatting:")
+        print("Raw formatted:", repr(formatted))
+        print("Initial tokens:", [tokenizer.decode([t]) for t in tokenizer.encode(formatted)])
+
+        # Make sure user messages end with extra_0
+        if messages[-1]["role"] == "user":
+            if not formatted.endswith("<|extra_0|>"):
+                formatted += "<|extra_0|>"
+
+        # Debug final format
+        print("\nFinal formatting:")
+        print("Final tokens:", [tokenizer.decode([t]) for t in tokenizer.encode(formatted)])
+        
+        return formatted
     else:
-        # Use the PROMPT_TEMPLATE_ENCODE_VIDEO to format the prompt
         return PROMPT_TEMPLATE_ENCODE_VIDEO.format(messages)
 
 def debug_chat_format(tokenizer, messages, label="Chat Format Debug"):
@@ -150,23 +187,25 @@ def main():
     parser.add_argument(
         "--temp",
         type=float,
-        default=0.0,
+        default=0,
         help="Temperature for sampling"
     )
     parser.add_argument(
         "--top-p",
         type=float,
-        default=1.0,
+        default=1,
         help="Top p for sampling"
     )
     parser.add_argument(
         "--debug-all",
         action="store_true",
+        default=False,
         help="Print all debug information"
     )
     parser.add_argument(
         "--debug-prompt",
         action="store_true",
+        default=False,
         help="Debug only prompt formatting"
     )
     parser.add_argument(
@@ -183,6 +222,7 @@ def main():
     parser.add_argument(
         "--verbose",
         action="store_true",
+        default=False,
         help="Print verbose output (default: False)",
     )
 
@@ -214,7 +254,10 @@ def main():
     # Log tokenizer loading for debugging
     logging.debug(f"Tokenizer loaded with config: {tokenizer.__dict__}")
 
-    if args.debug_all or args.debug_prompt:
+    if args.debug_prompt:
+        debug_prompt(tokenizer, args.prompt, args.use_chat_template)
+
+    if args.debug_all:
         print("\nModel Configuration:")
         print(f"Using chat template: {args.use_chat_template}")
         print(f"Special tokens map: {tokenizer.special_tokens_map}")

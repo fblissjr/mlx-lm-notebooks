@@ -1,15 +1,15 @@
-import json
 import os
 import base64
 import logging
 import tiktoken
 import unicodedata
+import json
 from transformers import PreTrainedTokenizer, AddedToken
-from typing import Collection, Dict, List, Set, Tuple, Union, Optional
+from typing import Collection, Dict, List, Set, Tuple, Union
 
 logger = logging.getLogger(__name__)
 
-VOCAB_FILES_NAMES = {"vocab_file": "hy.tiktoken", "vocab_file_json": "vocab.json"}  # Add vocab.json
+VOCAB_FILES_NAMES = {"vocab_file": "hy.tiktoken"}
 PAT_STR = r"""(?i:'s|'t|'re|'ve|'m|'ll|'d)|""" \
           r"""[^\r\n\p{L}\p{N}]?\p{L}+|""" \
           r"""\p{N}|""" \
@@ -80,53 +80,67 @@ class HYTokenizer(PreTrainedTokenizer):
             How to handle errors in decoding UTF-8 byte sequences.
             use ignore if you are in streaming inference
 
-        bos_token (`str` or `tokenizers.AddedToken`, *optional*, defaults to `""<|startoftext|>""`):
+        bod_token (`str` or `tokenizers.AddedToken`, *optional*, defaults to `""<|startoftext|>""`):
             The beginning of document token that was used for training. can be modified by your task.
             default to be `<|startoftext|>` for released base model.
 
-        eos_token (`str` or `tokenizers.AddedToken`, *optional*, defaults to `""<|endoftext|>""`):
+        eod_token (`str` or `tokenizers.AddedToken`, *optional*, defaults to `""<|endoftext|>""`):
             The end of document token that was used for training. can be modified by your task.
             default to be `<|endoftext|>` for released base model.
+
+        bos_token (`str` or `tokenizers.AddedToken`, *optional*, defaults to `None`):
+            The start or sep special token that was used for some training tasks.
+            default to be `<|startoftext|>` for released base model.
+            It can be set to `<|bos|>` when you training for some other task
+
+        eos_token (`str` or `tokenizers.AddedToken`, *optional*, defaults to `None`):
+            The end or sep special token that was used for some training tasks.
+            default to be `<|endoftext|>` for released base model.
+            It can be set to `<|eos|>` when you training for some other task
 
         pad_token (`str` or `tokenizers.AddedToken`, *optional*):
             A special token used to make arrays of tokens the same size for batching purpose. Will then be ignored by
             attention mechanisms or loss computation.
 
-        add_bos_token (`bool`, *optional*, defaults to `True`):
+        special_vocab_file (str, *optional*):
+            Customed special extra vocab file, same format with hy.tiktoken.
+            **Be careful** to use the extra special vocab, it will may cause the model loading collapse.
+            The data line be like:
+                `PHxhYmN8Pg== 0`
+            the id followed `base64.encode(str)` is unused, we will reset them in case of collision
+
+        add_bod_token (`bool`, *optional*, defaults to `True`):
             Whether or not to add an `bos_token` at the start of documents.
             This will effect `build_inputs_with_special_tokens` method
 
-        add_eos_token (`bool`, *optional*, defaults to `False`):
+        add_eod_token (`bool`, *optional*, defaults to `False`):
             Whether or not to add an `eos_token` at the end of documents.
             This will effect `build_inputs_with_special_tokens` method
 
-    """    
+    """
     vocab_files_names = VOCAB_FILES_NAMES
-    model_input_names = ["input_ids", "attention_mask"]
 
     def __init__(
         self,
         vocab_file,
         errors="replace",
+        bod_token="<|startoftext|>",
+        eod_token="<|endoftext|>",
         bos_token="<|startoftext|>",
         eos_token="<|endoftext|>",
         pad_token="<|pad|>",
-        add_bos_token=True,
-        add_eos_token=False,
+        add_bod_token=True,
+        add_eod_token=True,
         **kwargs,
     ):
-        super().__init__(
-            errors=errors,
-            bos_token=bos_token,
-            eos_token=eos_token,
-            pad_token=pad_token,
-            add_bos_token=add_bos_token,
-            add_eos_token=add_eos_token,
-            **kwargs,
-        )
+        super().__init__(**kwargs)
+
         self.errors = errors
-        self.mergeable_ranks = _load_tiktoken_bpe(vocab_file)
-        self.special_tokens = {token: index for index, token in SPECIAL_TOKENS}
+        self.mergeable_ranks = _load_tiktoken_bpe(vocab_file)  # type: Dict[bytes, int]
+        self.special_tokens = {
+            token: index
+            for index, token in SPECIAL_TOKENS
+        }
 
         enc = tiktoken.Encoding(
             "HunYuan",
@@ -138,14 +152,23 @@ class HYTokenizer(PreTrainedTokenizer):
             len(self.mergeable_ranks) + len(self.special_tokens) == enc.n_vocab
         ), f"{len(self.mergeable_ranks)} + {len(self.special_tokens)} != {enc.n_vocab} in encoding"
 
-        self.decoder = {v: k for k, v in self.mergeable_ranks.items()}
+        self.decoder = {
+            v: k for k, v in self.mergeable_ranks.items()
+        }  # type: dict[int, bytes|str]
         self.decoder.update({v: k for k, v in self.special_tokens.items()})
+
         self.tokenizer = enc
 
-        self.eod_token, self.eod_id = self.eos_token, self.eos_token_id
+        self.bod_token, self.bod_id = bod_token, self.special_tokens[bod_token]
+        self.eod_token, self.eod_id = eod_token, self.special_tokens[eod_token]
+        self.bos_token, self.bos_id = bos_token, self.special_tokens[bos_token]
+        self.eos_token, self.eos_id = eos_token, self.special_tokens[eos_token]
+        self.pad_token, self.pad_id = pad_token, self.special_tokens[pad_token]
 
-        self.add_bos_token = add_bos_token
-        self.add_eos_token = add_eos_token
+        self._num_special_token = len(self.special_tokens)
+
+        self.add_bod_token = add_bod_token
+        self.add_eod_token = add_eod_token
 
     def __getstate__(self):
         state = self.__dict__.copy()
@@ -166,9 +189,12 @@ class HYTokenizer(PreTrainedTokenizer):
         return self.tokenizer.n_vocab
 
     def get_vocab(self) -> Dict[bytes, int]:
+        """Return the vocabulary as a dictionary, without special tokens."""
         return self.mergeable_ranks
 
-    def convert_tokens_to_ids(self, tokens: Union[bytes, str, List[Union[bytes, str]]]) -> List[int]:
+    def convert_tokens_to_ids(
+        self, tokens: Union[bytes, str, List[Union[bytes, str]]]
+    ) -> List[int]:
         ids = []
         if isinstance(tokens, (str, bytes)):
             if tokens in self.special_tokens:
@@ -181,6 +207,14 @@ class HYTokenizer(PreTrainedTokenizer):
             else:
                 ids.append(self.mergeable_ranks.get(token))
         return ids
+
+    def build_inputs_with_special_tokens(self, token_ids_0, token_ids_1=None):
+        bod_token_id = [self.bod_id] if self.add_bod_token else []
+        eod_token_id = [self.eod_id] if self.add_eod_token else []
+        output = bod_token_id + token_ids_0 + eod_token_id
+        if token_ids_1 is not None:
+            output = output + bod_token_id + token_ids_1 + eod_token_id
+        return output
 
     def _add_tokens(
         self,
@@ -195,53 +229,82 @@ class HYTokenizer(PreTrainedTokenizer):
             if surface_form not in SPECIAL_TOKENS_SET:
                 raise ValueError("Adding unknown special tokens is not supported")
         return 0
+    
+    def save_vocabulary(self, save_directory: str, filename_prefix: str = None) -> Tuple[str]:
+        """
+        Save the vocabulary and special tokens file to a directory.
 
-    def save_vocabulary(self, save_directory: str, **kwargs) -> Tuple[str]:
+        Args:
+            save_directory (`str`):
+                The directory in which to save the vocabulary.
+            filename_prefix (`str`, *optional*):
+                An optional prefix to add to the named of the saved files.
+
+        Returns:
+            `Tuple(str)`: Paths to the files saved.
         """
-        Save the vocabulary to a tiktoken file and a JSON file.
-        """
-        # Save tiktoken file
-        file_path = os.path.join(save_directory, "hy.tiktoken")
-        with open(file_path, "w", encoding="utf8") as w:
+        if not os.path.isdir(save_directory):
+            logger.error(f"Vocabulary path ({save_directory}) should be a directory")
+            return
+        
+        # Save the tiktoken vocabulary
+        vocab_file_path = os.path.join(
+            save_directory, (filename_prefix + "-" if filename_prefix else "") + "hy.tiktoken"
+        )
+        with open(vocab_file_path, "w", encoding="utf8") as w:
             for k, v in self.mergeable_ranks.items():
                 line = base64.b64encode(k).decode("utf8") + " " + str(v) + "\n"
                 w.write(line)
 
-        # Save JSON file
-        json_file_path = os.path.join(save_directory, "vocab.json")
-        with open(json_file_path, "w", encoding="utf8") as json_w:
-            vocab_dict = {}
+        # Save the vocabulary in JSON format
+        vocab_json_path = os.path.join(
+            save_directory, (filename_prefix + "-" if filename_prefix else "") + "vocab.json"
+        )
+        vocab_dict = {base64.b64encode(k).decode("utf-8"): v for k, v in self.mergeable_ranks.items()}
+        with open(vocab_json_path, "w", encoding="utf-8") as f:
+            json.dump(vocab_dict, f, ensure_ascii=False, indent=4)
 
-            # Add regular tokens (decoded from bytes)
-            for token_bytes, token_id in self.mergeable_ranks.items():
-                vocab_dict[token_id] = token_bytes.decode("utf-8", errors="ignore")
+        # Correctly save special tokens to special_tokens_map.json
+        special_tokens_dict = {}
+        for token, index in self.special_tokens.items():
+            special_tokens_dict[token] = index
 
-            # Add special tokens (already strings)
-            for token, token_id in self.special_tokens.items():
-              vocab_dict[token_id] = token
+        with open(special_tokens_path, "w", encoding="utf-8") as f:
+            json.dump(special_tokens_dict, f, ensure_ascii=False, indent=4)
 
-            # Sort by token ID for easier readability
-            vocab_dict = dict(sorted(vocab_dict.items()))
+        return (vocab_file_path, vocab_json_path, special_tokens_path)
 
-            json.dump(vocab_dict, json_w, ensure_ascii=False, indent=4)
-
-        return file_path, json_file_path
-
-    def tokenize(self, text, allowed_special="all", disallowed_special=(), **kwargs):
-        logger.debug(f"tokenize called with text: {repr(text)}")
-        logger.debug(f"allowed_special: {allowed_special}, disallowed_special: {disallowed_special}")
+    def tokenize(
+        self,
+        text: str,
+        allowed_special: Union[Set, str] = "all",
+        disallowed_special: Union[Collection, str] = (),
+        **kwargs,
+    ) -> List[Union[bytes, str]]:
+        """
+        Converts a string in a sequence of tokens.
+        Args:
+            text (`str`):
+                The sequence to be encoded.
+            allowed_special (`Literal["all"]` or `set`):
+                The surface forms of the tokens to be encoded as special tokens in regular texts.
+                Default to "all".
+            disallowed_special (`Literal["all"]` or `Collection`):
+                The surface forms of the tokens that should not be in regular texts and trigger errors.
+                Default to an empty tuple.
+            kwargs (additional keyword arguments, *optional*):
+                Will be passed to the underlying model specific encode method.
+        Returns:
+            `List[bytes|str]`: The list of tokens.
+        """
         tokens = []
         text = unicodedata.normalize("NFC", text)
 
-        # Log the direct tiktoken encoding
-        raw_tokens = self.tokenizer.encode(
+        # this implementation takes a detour: text -> token id -> token surface forms
+        for t in self.tokenizer.encode(
             text, allowed_special=allowed_special, disallowed_special=disallowed_special
-        )
-        logger.debug(f"tiktoken raw tokens: {raw_tokens}")
-
-        for t in raw_tokens:
+        ):
             tokens.append(self.decoder[t])
-        logger.debug(f"tokenize output: {tokens}")
         return tokens
 
     def convert_tokens_to_string(self, tokens: List[Union[bytes, str]]) -> str:
@@ -269,11 +332,13 @@ class HYTokenizer(PreTrainedTokenizer):
         return self.tokenizer.n_vocab
 
     def _convert_id_to_token(self, index: int) -> Union[bytes, str]:
+        """Converts an id to a token, special tokens included"""
         if index in self.decoder:
             return self.decoder[index]
         raise ValueError("unknown ids")
 
     def _convert_token_to_id(self, token: Union[bytes, str]) -> int:
+        """Converts a token to an id using the vocab, special tokens included"""
         if token in self.special_tokens:
             return self.special_tokens[token]
         if token in self.mergeable_ranks:
@@ -288,35 +353,18 @@ class HYTokenizer(PreTrainedTokenizer):
         """
         raise NotImplementedError
 
-    def _decode(self, token_ids, skip_special_tokens=False, errors=None, **kwargs):
-        #logger.debug(f"_decode called with tokens: {token_ids}")
+    def _decode(
+        self,
+        token_ids: Union[int, List[int]],
+        skip_special_tokens: bool = False,
+        errors: str = None,
+        **kwargs,
+    ) -> str:
         if isinstance(token_ids, int):
             token_ids = [token_ids]
         if skip_special_tokens:
             token_ids = [i for i in token_ids if i < self.eod_id]
-        result = self.tokenizer.decode(token_ids, errors=errors or self.errors)
-        #logger.debug(f"_decode result: {result}")
-        return result
-
-    def build_inputs_with_special_tokens(
-        self, token_ids_0: List[int], token_ids_1: Optional[List[int]] = None
-    ) -> List[int]:
-        """
-        Build model inputs from a sequence or a pair of sequence for question answering tasks by concatenating and
-        adding special tokens. A sequence has the following format:
-        - single sequence: `bos_token_id` + `X`
-        - pair of sequences: `bos_token_id` + `A` + `eos_token_id` + `bos_token_id` + `B` + `eos_token_id`
-        Args:
-            token_ids_0 (`List[int]`):
-                List of IDs to which the special tokens will be added.
-            token_ids_1 (`List[int]`, *optional*):
-                Optional second list of IDs for sequence pairs.
-        Returns:
-            `List[int]`: List of [input IDs](../glossary#input-ids) with the appropriate special tokens.
-        """
-        bos = [self.bos_token_id] if self.add_bos_token else []
-        eos = [self.eos_token_id] if self.add_eos_token else []
-
-        if token_ids_1 is None:
-            return bos + token_ids_0 + eos
-        return bos + token_ids_0 + eos + bos + token_ids_1 + eos
+        return self.tokenizer.decode(token_ids, errors=errors or self.errors)
+    
+tokenizer = HYTokenizer(vocab_file="hy.tiktoken")
+tokenizer.save_pretrained("saved_tokenizer")
