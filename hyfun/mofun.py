@@ -106,7 +106,7 @@ def format_raw_message(text: str, role: str = "user") -> str:
         return f"{text}<|extra_5|>"
     return text
 
-def format_for_model(tokenizer, messages, use_chat_template: bool = False, add_generation_prompt: bool = False) -> str:
+def format_for_model(tokenizer, messages, use_chat_template: bool = False, add_generation_prompt: bool = True) -> str:
     """Formats messages using the tokenizer's chat template."""
     if use_chat_template:
         # Apply template without generation prompt first
