@@ -160,77 +160,69 @@ class Gate(nn.Module):
 class MoeBlock(nn.Module):
     def __init__(self, args: ModelArgs):
         super().__init__()
-        # Add debug logging
-        logging.info(f"Initializing MoeBlock with args: {vars(args)}")
-        
         dim = args.hidden_size
         intermediate_size = args.intermediate_size
-        try:
-            self.use_shared_mlp = args.use_mixed_mlp_moe
-            logging.info(f"use_shared_mlp: {self.use_shared_mlp}")
+        self.use_shared_mlp = args.use_mixed_mlp_moe
 
-            if args.use_mixed_mlp_moe:
-                logging.info("Creating shared MLP")
-                self.shared_mlp = MLP(dim, intermediate_size * args.num_shared_expert)
+        if args.use_mixed_mlp_moe:
+            self.shared_mlp = MLP(dim, intermediate_size * args.num_shared_expert)
 
-            self.num_experts = num_experts = args.num_experts
-            logging.info(f"num_experts: {num_experts}")
-            self.top_k = args.moe_topk
-            logging.info(f"top_k: {self.top_k}")
+        self.num_experts = num_experts = args.num_experts
+        self.top_k = args.moe_topk
 
-            logging.info("Creating gate")
-            self.gate = Gate(dim, num_experts)
-            logging.info("Creating switch_mlp")
-            self.switch_mlp = SwitchGLU(dim, intermediate_size, num_experts)
-            logging.info("MoeBlock initialization complete")
-        except Exception as e:
-            logging.error(f"Error initializing MoeBlock: {e}")
-            raise
+        self.gate = Gate(dim, num_experts)
+        self.switch_mlp = SwitchGLU(dim, intermediate_size, num_experts)
 
-    def __call__(self, x: mx.array):
-        logging.info("Starting MoeBlock forward pass")
-        logging.info(f"Input shape: {x.shape}")
-        
+    def __call__(
+        self,
+        x: mx.array,
+    ):
         gates = self.gate(x)
-        logging.info(f"Gate output shape: {gates.shape}")
-        
         gates = mx.softmax(gates, axis=-1, precise=True)
+
         k = self.top_k
-        inds = mx.stop_gradient(mx.argpartition(-gates, kth=k-1, axis=-1)[..., :k])
+        inds = mx.stop_gradient(mx.argpartition(-gates, kth=k - 1, axis=-1)[..., :k])
         scores = mx.take_along_axis(gates, inds, axis=-1)
 
-        logging.info(f"Expert indices shape: {inds.shape}")
-        
         y = self.switch_mlp(x, inds)
         y = (y * scores[..., None]).sum(axis=-2)
 
         if self.use_shared_mlp:
-            logging.info("Running shared MLP path")
             shared_expert_output = self.shared_mlp(x)
             y = y + shared_expert_output
-            
+
         return y
 
 
 class DecoderLayer(nn.Module):
     def __init__(self, args: ModelArgs, kv_proj: bool):
         super().__init__()
-        logging.info(f"Initializing DecoderLayer with kv_proj={kv_proj}")
         self.hidden_size = args.hidden_size
         self.self_attn = Attention(kv_proj, args)
-        try:
-            logging.info("Creating MLP/MoE block")
-            self.mlp = MoeBlock(args)
-            if self.mlp is None:
-                logging.error("MLP is None after initialization!")
-        except Exception as e:
-            logging.error(f"Error creating MLP: {e}")
-            raise
-        self.input_layernorm = nn.RMSNorm(args.hidden_size, eps=args.rms_norm_eps)
-        self.post_attention_layernorm = nn.RMSNorm(
-            args.hidden_size, eps=args.rms_norm_eps
-        )
+        self.mlp = MoeBlock(args)
+
+        # Make LayerNorms with bias=False
+        self.input_layernorm = nn.LayerNorm(args.hidden_size, bias=False)
+        self.post_attention_layernorm = nn.LayerNorm(args.hidden_size, bias=False)
         self.args = args
+
+    def _verify_moe_init(self):
+        """Verify MoE initialization"""
+        if not hasattr(self, 'mlp'):
+            logging.error("No mlp attribute after init!")
+            return
+            
+        if self.mlp is None:
+            logging.error("MLP is None after init!")
+            return
+            
+        # Check component existence
+        components = ['switch_mlp', 'shared_mlp', 'gate']
+        for comp in components:
+            if not hasattr(self.mlp, comp):
+                logging.error(f"MLP missing {comp}")
+            else:
+                logging.info(f"MLP has {comp}")
 
     def __call__(
         self,
@@ -239,24 +231,23 @@ class DecoderLayer(nn.Module):
         cache: Optional[Any] = None,
         shared_kv_states: Optional[Tuple[mx.array, mx.array]] = None,
     ):
-        # Add logging for debugging
-        logging.info(f"DecoderLayer call - mlp type: {type(self.mlp)}")
-        
         r, shared_kv_states = self.self_attn(
             self.input_layernorm(x), mask, cache, shared_kv_states
         )
         h = x + r
 
-        # Add more detailed logging
         if self.mlp is None:
-            logging.error("MLP is None during forward pass!")
-        else:
-            logging.info(f"MLP attributes: {dir(self.mlp)}")
+            mlp_keys = []
+            if hasattr(self, '__dict__'):
+                for k, v in self.__dict__.items():
+                    if 'mlp' in k:
+                        mlp_keys.append(k)
+            logging.error(f"MLP is None in forward pass. MLP-related keys: {mlp_keys}")
+            raise ValueError("MLP is None - weights not properly loaded")
             
         r = self.mlp(self.post_attention_layernorm(h))
         out = h + r
         return out, shared_kv_states
-
 
 class HunYuanModel(nn.Module):
     def __init__(self, args: ModelArgs):
@@ -264,6 +255,7 @@ class HunYuanModel(nn.Module):
         self.args = args
         self.vocab_size = args.vocab_size
         self.num_hidden_layers = args.num_hidden_layers
+        self._weights_checked = False
         assert self.vocab_size > 0
         self.embed_tokens = nn.Embedding(args.vocab_size, args.hidden_size)
         self.layers = [
@@ -272,12 +264,21 @@ class HunYuanModel(nn.Module):
         ]
         self.norm = nn.RMSNorm(args.hidden_size, eps=args.rms_norm_eps)
 
-    def __call__(
-        self,
-        inputs: mx.array,
-        mask: mx.array = None,
-        cache=None,
-    ):
+    def __call__(self, inputs: mx.array, mask: mx.array = None, cache=None):
+        # Only run weight checks first time
+        if not self._weights_checked:
+            def check_moe_weights(layer):
+                if hasattr(layer, 'mlp') and layer.mlp is not None:
+                    if hasattr(layer.mlp, 'switch_mlp'):
+                        w = layer.mlp.switch_mlp.gate_proj.weight if hasattr(layer.mlp.switch_mlp, 'gate_proj') else None
+                        logging.info(f"switch_mlp weight example: {w.shape if w is not None else None}")
+            
+            logging.info("\nChecking MoE weights on first forward pass:")
+            for i, layer in enumerate(self.layers[:3]):
+                logging.info(f"\nLayer {i} weight check:")
+                check_moe_weights(layer)
+            self._weights_checked = True
+
         h = self.embed_tokens(inputs)
 
         if mask is None:
@@ -310,56 +311,34 @@ class Model(nn.Module):
         out = self.model(inputs, mask, cache)
         return self.model.embed_tokens.as_linear(out)
 
-    # Fixed 1-16-2025 to handle stacked weights from conversion
     def sanitize(self, weights):
-        """Maps weights to the expected HunYuan MoE structure"""
-        # Debug print existing weight structure
+        """Process the weights to match the expected HunYuan MoE structure"""
+        # Log what we have initially
         moe_keys = [k for k in weights.keys() if 'mlp' in k]
-        logging.info(f"Found {len(moe_keys)} MoE-related keys")
-
-        # Categorize keys to understand structure
-        key_categories = {
-            'switch_mlp': [k for k in moe_keys if 'switch_mlp' in k],
-            'shared_mlp': [k for k in moe_keys if 'shared_mlp' in k],
-            'gate': [k for k in moe_keys if '.gate.' in k]
-        }
+        logging.info(f"Found {len(moe_keys)} MoE-related keys in weights")
         
-        for category, keys in key_categories.items():
-            logging.info(f"\n{category} keys found: {len(keys)}")
-            # Sample a few keys to see structure
-            for k in keys[:3]:
-                shape = weights[k].shape if k in weights else None
-                logging.info(f"  {k}: {shape}")
-
-        # Check if we already have the stacked format (switch_mlp)
+        # Filter out any bias terms for LayerNorm
+        weights = {k: v for k, v in weights.items() if not k.endswith('.bias')}
+        
+        # Check if weights are already in correct format
         if any('switch_mlp' in k for k in weights.keys()):
-            # Sample check - let's look at layer 0's weights
-            logging.info("\nChecking layer 0 weight structure:")
-            for comp in ['switch_mlp', 'shared_mlp', 'gate']:
-                prefix = f"model.layers.0.mlp.{comp}"
-                found_keys = [k for k in weights.keys() if k.startswith(prefix)]
-                logging.info(f"\n{comp} component keys:")
-                for k in found_keys:
-                    shape = weights[k].shape if k in weights else None
-                    logging.info(f"  {k}: {shape}")
-
-            return weights
-
-        # If we get here, we have the old PyTorch format that needs conversion
-        if "model.layers.0.mlp.experts.0.up_proj.weight" in weights:
+            # For each layer, verify we have the expected components
             for l in range(self.args.num_hidden_layers):
-                prefix = f"model.layers.{l}"
-                # Convert experts to stacked format
-                for n in ["up_proj", "down_proj", "gate_proj"]:
-                    for k in ["weight", "scales", "biases"]:
-                        expert_key = f"{prefix}.mlp.experts.0.{n}.{k}"
-                        if expert_key in weights:
-                            to_join = [
-                                weights.pop(f"{prefix}.mlp.experts.{e}.{n}.{k}")
-                                for e in range(self.args.num_experts)
-                            ]
-                            weights[f"{prefix}.mlp.switch_mlp.{n}.{k}"] = mx.stack(to_join)
-
+                prefix = f"model.layers.{l}.mlp"
+                required = {
+                    'switch_mlp': ['up_proj', 'down_proj', 'gate_proj'],
+                    'shared_mlp': ['up_proj', 'down_proj', 'gate_proj'],
+                    'gate': ['wg']
+                }
+                
+                for comp, parts in required.items():
+                    comp_prefix = f"{prefix}.{comp}"
+                    found = [k for k in weights.keys() if k.startswith(comp_prefix)]
+                    if not found:
+                        logging.warning(f"Missing component {comp} in layer {l}")
+                    else:
+                        logging.info(f"Layer {l} has {comp} with {len(found)} weights")
+        
         return weights
 
     @property

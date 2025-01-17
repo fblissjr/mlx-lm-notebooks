@@ -1,21 +1,13 @@
 {
-  "model_max_length": 1048576,
-  "tokenizer_class": "HYTokenizer",
   "auto_map": {
-    "AutoTokenizer": ["tokenization_hy.HYTokenizer", "null"]
+    "AutoTokenizer": ["tokenization_hy.HYTokenizer", null]
   },
   "additional_special_tokens": [
     "<|startoftext|>",
-    "<|endoftext|>",
-    "<|bos|>",
-    "<|eos|>",
-    "<|pad|>",
     "<|extra_0|>",
     "<|extra_4|>",
-    "<|extra_5|>"
+    "<|extra_5|>",
+    "<|eos|>"
   ],
-  "bos_token": "<|startoftext|>",
-  "eos_token": "<|endoftext|>",
-  "pad_token": "<|pad|>",
-  "chat_template": "{% for message in messages %}{% if message['role'] == 'user' %}{% if not loop.first %}<|startoftext|>{% endif %}{{ message['content'] }}<|extra_0|><|endoftext|>{% elif message['role'] == 'assistant' %}{{ message['content'] }}<|eos|><|endoftext|>{% endif %}{% endfor %}"
+  "chat_template": "{% set context = {'has_head': true} %}{% set loop_messages = messages %}{% for message in loop_messages %}{% set content = message['content'] %}{% if loop.index0 == 0 %}{% if content == '' %}{% set _ = context.update({'has_head': false}) %}{% elif message['role'] == 'system' %}{% set content = '<|startoftext|>' + content + '<|extra_4|>' + '<|endoftext|>' %}{% endif %}{% endif %}{% if message['role'] == 'user' %}{% if loop.index0 == 1 and not context.has_head %}{% set content = '<|startoftext|>' + content %}{% endif %}{% if loop.index0 == 1 and context.has_head %}{% set content = content + '<|extra_0|>' + '<|endoftext|>' %}{% else %}{% set content = '<|startoftext|>' + content + '<|extra_0|>' + '<|endoftext|>' %}{% endif %}{% elif message['role'] == 'assistant' %}{% set content = content + '<|eos|>' + '<|endoftext|>' %}{% endif %}{{ content }}{% endfor %}"
 }
