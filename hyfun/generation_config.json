@@ -1,0 +1,10 @@
+{
+  "do_sample": true,
+  "eos_token_id": [127960, 127967],
+  "pad_token_id": 127961,
+  "repetition_penalty": 1.05,
+  "temperature": 0.7,
+  "top_k": 20,
+  "top_p": 0.6,
+  "transformers_version": "4.45.0"
+}
